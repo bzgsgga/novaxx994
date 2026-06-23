@@ -1,39 +1,68 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
-// التأكد من جلب التوكن
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// دالة توليد الرابط عند استلام فيديو أو مستند
+// معالجة الفيديو في الخاص
 bot.on(['video', 'document'], async (ctx) => {
-    const message = ctx.message || ctx.channelPost;
-    if (!message) return;
+    if (ctx.chat.type !== 'private') return;
 
-    const video = message.video;
-    const doc = message.document;
-    
-    if (video || doc) {
-        const fileId = video ? video.file_id : doc.file_id;
+    const video = ctx.message.video;
+    const doc = ctx.message.document;
+    const fileId = video ? video.file_id : doc.file_id;
+
+    try {
+        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر، يرجى الانتظار ثوانٍ...");
+        const fileLink = await ctx.telegram.getFileLink(fileId);
         
-        try {
-            // جلب رابط الملف من سيرفرات التليغرام
-            const fileLink = await ctx.telegram.getFileLink(fileId);
-            
-            // جلب رابط الدومين الخاص بك على Vercel تلقائياً
-            const host = ctx.headers?.host || process.env.VERCEL_URL || 'your-domain.vercel.app';
-            const streamLink = `https://${host}/api/stream?file=${encodeURIComponent(fileLink.href)}`;
-            
-            // إرسال الرد داخل الجروب
-            await ctx.reply(`✅ تم تجهيز رابط البث للفيلم بنجاح!\n\n🔗 رابط المشاهدة المباشر:\n${streamLink}`, {
-                reply_to_message_id: message.message_id
-            });
-        } catch (error) {
-            console.error("Error:", error);
-        }
+        const host = ctx.headers?.host || process.env.VERCEL_URL || 'novaxx994.vercel.app';
+        const streamLink = `https://${host}/stream?file=${encodeURIComponent(fileLink.href)}`;
+        
+        await ctx.telegram.deleteMessage(ctx.chat.id, waitingMsg.message_id);
+        await ctx.reply(`✅ جاهز للمشاهدة البث المباشر!\n\n🔗 رابط الفيلم المباشر:\n${streamLink}`);
+    } catch (error) {
+        console.error("Error:", error);
+        await ctx.reply("❌ حدث خطأ أثناء جلب رابط الفيلم.");
     }
 });
 
-// تصدير الدالة لتشغيلها كـ Serverless Function على Vercel
+bot.start((ctx) => ctx.reply("أهلاً بك! قم بتحويل أو إرسال أي فيلم هنا وسأعطيك رابط البث فوراً."));
+
+// المصدر المسؤول عن معالجة الطلبات في Vercel
+module.exports = async (req, res) => {
+    try {
+        // التأكد من تفعيل قراءة الـ JSON للقادم من تليغرام
+        if (req.method === 'POST') {
+            // تليغرام يرسل التحديثات هنا
+            await bot.handleUpdate(req.body, res);
+            if (!res.writableEnded) {
+                res.status(200).end();
+            }
+            return;
+        }
+
+        const urlObj = new URL(req.url, `https://${req.headers.host}`);
+
+        // مسار البث المباشر للأفلام
+        if (urlObj.pathname.startsWith('/stream')) {
+            const fileUrl = urlObj.searchParams.get('file');
+            if (!fileUrl) {
+                return res.status(400).send('Missing file URL');
+            }
+
+            const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
+            res.setHeader('Content-Type', response.headers['content-type'] || 'video/mp4');
+            response.data.pipe(res);
+            return;
+        }
+
+        // الصفحة الرئيسية الافتراضية للموقع
+        res.status(200).send('Bot Server is Ready and Alive!');
+    } catch (error) {
+        console.error("Server Error:", error);
+        res.status(500).send('Internal Error');
+    }
+};
 module.exports = async (req, res) => {
     try {
         const urlObj = new URL(req.url, `http://${req.headers.host}`);
