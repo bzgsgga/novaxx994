@@ -3,7 +3,10 @@ const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// معالجة الرسائل
+// معالجة تشغيل البوت
+bot.start((ctx) => ctx.reply("💥 أهلاً بك يا غالي! البوت شغال الآن بنجاح على سيرفر Vercel الآمن. حوّل أو أرسل لي أي فيلم هنا وسأعطيك رابط البث فوراً."));
+
+// معالجة ملفات الفيديو والمستندات
 bot.on(['video', 'document'], async (ctx) => {
     const message = ctx.message || ctx.channelPost;
     if (!message) return;
@@ -13,27 +16,55 @@ bot.on(['video', 'document'], async (ctx) => {
     const fileId = video ? video.file_id : doc.file_id;
 
     try {
-        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر...");
+        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر المخصص لك، يرجى الانتظار...");
         const fileLink = await ctx.telegram.getFileLink(fileId);
         
         const host = ctx.headers?.host || process.env.VERCEL_URL || 'novaxx994.vercel.app';
         const streamLink = `https://${host}/stream?file=${encodeURIComponent(fileLink.href)}`;
         
         await ctx.telegram.deleteMessage(ctx.chat.id, waitingMsg.message_id).catch(() => {});
-        await ctx.reply(`✅ جاهز للمشاهدة البث المباشر!\n\n🔗 رابط الفيلم المباشر:\n${streamLink}`);
+        await ctx.reply(`✅ جاهز للمشاهدة والبث المباشر!\n\n🔗 رابط الفيلم المباشر:\n${streamLink}`);
     } catch (error) {
         console.error("Error:", error);
-        await ctx.reply("❌ حدث خطأ أثناء جلب رابط الفيلم.");
+        await ctx.reply("❌ حدث خطأ أثناء جلب رابط الفيلم من خوادم التليغرام.");
     }
 });
 
-bot.start((ctx) => ctx.reply("أهلاً بك! أرسل أو حوّل أي فيلم هنا وسأعطيك رابط البث فوراً."));
+// الدالة الأساسية لاستقبال ومعالجة طلبات الويب من Vercel
+module.exports = async (req, res) => {
+    // معالجة طلبات البوت القادمة من التليغرام (Webhook)
+    if (req.method === 'POST') {
+        try {
+            // تليغرام يرسل التحديثات في الـ req.body مباشرة داخل بيئة Vercel المحدثة
+            const body = req.body;
+            await bot.handleUpdate(body, res);
+            if (!res.writableEnded) res.status(200).end();
+        } catch (err) {
+            console.error("Webhook Error:", err);
+            res.status(500).send("Webhook Error");
+        }
+        return;
+    }
 
-// دالة مساعدة لقراءة البيانات القادمة كـ Stream وتحويلها إلى JSON
-function parseRequestBody(req) {
-    return new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', chunk => { body += chunk.toString(); });
+    // معالجة طلبات البث المباشر (GET)
+    const urlObj = new URL(req.url, `https://${req.headers.host}`);
+    if (urlObj.pathname.startsWith('/stream')) {
+        const fileUrl = urlObj.searchParams.get('file');
+        if (!fileUrl) return res.status(400).send('Missing file URL');
+
+        try {
+            const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
+            res.setHeader('Content-Type', response.headers['content-type'] || 'video/mp4');
+            response.data.pipe(res);
+        } catch (err) {
+            res.status(500).send('Streaming Error');
+        }
+        return;
+    }
+
+    // الصفحة الرئيسية الافتراضية
+    res.status(200).send('Bot Server is Up and Running Perfectly!');
+};
         req.on('end', () => {
             try { resolve(body ? JSON.parse(body) : {}); }
             catch (e) { resolve({}); }
