@@ -1,12 +1,16 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// التأكد من جلب التوكن بشكل صحيح
+const token = process.env.BOT_TOKEN || '8438510662:AAFYklzB7mu8U6j0Wzby0YkuwJsgaY3DtJk';
+const bot = new Telegraf(token);
 
-// معالجة تشغيل البوت
-bot.start((ctx) => ctx.reply("💥 أهلاً بك يا غالي! البوت شغال الآن بنجاح على سيرفر Vercel الآمن. حوّل أو أرسل لي أي فيلم هنا وسأعطيك رابط البث فوراً."));
+// عند إرسال /start
+bot.start((ctx) => {
+    return ctx.reply("💥 أهلاً بك! البوت يعمل الآن بنجاح على سيرفر Vercel المحدث.\n\nقم بتحويل أو إرسال أي فيديو هنا مباشرة وسأعطيك رابط البث فوراً.");
+});
 
-// معالجة ملفات الفيديو والمستندات
+// عند إرسال فيديو أو مستند
 bot.on(['video', 'document'], async (ctx) => {
     const message = ctx.message || ctx.channelPost;
     if (!message) return;
@@ -15,25 +19,68 @@ bot.on(['video', 'document'], async (ctx) => {
     const doc = message.document;
     const fileId = video ? video.file_id : doc.file_id;
 
+    if (!fileId) return;
+
     try {
-        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر المخصص لك، يرجى الانتظار...");
+        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر، يرجى الانتظار ثوانٍ...");
+        
+        // جلب رابط الملف من تلغرام
         const fileLink = await ctx.telegram.getFileLink(fileId);
         
-        const host = ctx.headers?.host || process.env.VERCEL_URL || 'novaxx994.vercel.app';
+        const host = ctx.headers?.host || 'novaxx994.vercel.app';
         const streamLink = `https://${host}/stream?file=${encodeURIComponent(fileLink.href)}`;
         
+        // مسح رسالة الانتظار وإرسال الرابط النهائي
         await ctx.telegram.deleteMessage(ctx.chat.id, waitingMsg.message_id).catch(() => {});
-        await ctx.reply(`✅ جاهز للمشاهدة والبث المباشر!\n\n🔗 رابط الفيلم المباشر:\n${streamLink}`);
+        return ctx.reply(`✅ جاهز للمشاهدة المباشرة!\n\n🔗 رابط الفيلم المباشر:\n${streamLink}`);
     } catch (error) {
-        console.error("Error:", error);
-        await ctx.reply("❌ حدث خطأ أثناء جلب رابط الفيلم من خوادم التليغرام.");
+        console.error("Error inside bot execution:", error);
+        return ctx.reply("❌ حدث خطأ أثناء معالجة الفيلم. تأكد من حجم الملف.");
     }
 });
 
-// الدالة الأساسية لاستقبال ومعالجة طلبات الويب من Vercel
+// الدالة الأساسية لـ Vercel
 module.exports = async (req, res) => {
-    // معالجة طلبات البوت القادمة من التليغرام (Webhook)
-    if (req.method === 'POST') {
+    try {
+        const reqUrl = req.url || '';
+        
+        // 1. مسار البث المباشر (GET /stream)
+        if (reqUrl.includes('/stream')) {
+            // تفكيك الرابط يدويًا لتجنب أخطاء الـ URL Object في Vercel
+            const fileParam = reqUrl.split('file=')[1];
+            if (!fileParam) {
+                return res.status(400).send('Missing file URL');
+            }
+            const fileUrl = decodeURIComponent(fileParam);
+
+            const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
+            res.setHeader('Content-Type', response.headers['content-type'] || 'video/mp4');
+            response.data.pipe(res);
+            return;
+        }
+
+        // 2. استقبال تحديثات التلغرام (POST)
+        if (req.method === 'POST') {
+            const body = req.body;
+            if (body && Object.keys(body).length > 0) {
+                await bot.handleUpdate(body, res);
+            }
+            if (!res.writableEnded) {
+                res.status(200).end();
+            }
+            return;
+        }
+
+        // 3. الصفحة الرئيسية العادية
+        res.status(200).send('Bot Server is Up and Running Perfectly!');
+    } catch (error) {
+        console.error("Server Error:", error);
+        // منع السيرفر من الانهيار وإرجاع استجابة دائماً لتلغرام لكي لا يعلق البوت
+        if (!res.writableEnded) {
+            res.status(200).send('Handled Error');
+        }
+    }
+};
         try {
             // تليغرام يرسل التحديثات في الـ req.body مباشرة داخل بيئة Vercel المحدثة
             const body = req.body;
