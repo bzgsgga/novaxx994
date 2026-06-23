@@ -1,13 +1,11 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
-// التوكن الخاص بك مدمج مباشرة لضمان العمل
 const token = '8438510662:AAFYklzB7mu8U6j0Wzby0YkuwJsgaY3DtJk';
 const bot = new Telegraf(token);
 
-// أوامر البوت الأساسية
 bot.start((ctx) => {
-    return ctx.reply("💥 أهلاً بك! البوت يعمل الآن بنجاح على سيرفر Vercel المحدث.\n\nقم بتحويل أو إرسال أي فيديو هنا مباشرة وسأعطيك رابط البث فوراً.");
+    return ctx.reply("💥 أهلاً بك! البوت يعمل الآن بنجاح.\n\nقم بتحويل أو إرسال أي فيديو هنا مباشرة وسأعطيك رابط البث فوراً.");
 });
 
 bot.on(['video', 'document'], async (ctx) => {
@@ -21,7 +19,7 @@ bot.on(['video', 'document'], async (ctx) => {
     if (!fileId) return;
 
     try {
-        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر، يرجى الانتظار ثوانٍ...");
+        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر...");
         const fileLink = await ctx.telegram.getFileLink(fileId);
         
         const host = ctx.headers?.host || 'novaxx994.vercel.app';
@@ -35,12 +33,11 @@ bot.on(['video', 'document'], async (ctx) => {
     }
 });
 
-// الدالة الرئيسية لبيئة Vercel
 module.exports = async (req, res) => {
     try {
         const reqUrl = req.url || '';
 
-        // 1. مسار البث المباشر (GET /stream)
+        // 1. مسار البث المباشر المحسن (GET /stream)
         if (reqUrl.includes('/stream')) {
             const fileParam = reqUrl.split('file=')[1];
             if (!fileParam) {
@@ -49,12 +46,15 @@ module.exports = async (req, res) => {
             const fileUrl = decodeURIComponent(fileParam);
 
             const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
-            res.setHeader('Content-Type', response.headers['content-type'] || 'video/mp4');
+            
+            // إجبار المتصفح على تشغيل الفيديو مدمجاً (inline) بدلاً من تحميله (attachment)
+            res.setHeader('Content-Type', 'video/mp4');
+            res.setHeader('Content-Disposition', 'inline');
+            
             response.data.pipe(res);
             return;
         }
 
-        // 2. استقبال تحديثات التلغرام (POST)
         if (req.method === 'POST') {
             const body = req.body;
             if (body && Object.keys(body).length > 0) {
@@ -66,7 +66,6 @@ module.exports = async (req, res) => {
             return;
         }
 
-        // 3. الصفحة الرئيسية الافتراضية للموقع
         res.status(200).send('Bot Server is Up and Running Perfectly!');
     } catch (error) {
         console.error("Server Error:", error);
