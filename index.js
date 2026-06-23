@@ -1,12 +1,11 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const http = require('http');
 
+// التأكد من جلب التوكن
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// معالجة أي فيديو أو ملف يتم رفعه داخل الجروب أو القناة المشترك بها البوت
+// دالة توليد الرابط عند استلام فيديو أو مستند
 bot.on(['video', 'document'], async (ctx) => {
-    // التأكد من وجود ملف فيديو أو مستند
     const message = ctx.message || ctx.channelPost;
     if (!message) return;
 
@@ -17,23 +16,55 @@ bot.on(['video', 'document'], async (ctx) => {
         const fileId = video ? video.file_id : doc.file_id;
         
         try {
-            // جلب رابط الملف المباشر من سيرفرات التليغرام
+            // جلب رابط الملف من سيرفرات التليغرام
             const fileLink = await ctx.telegram.getFileLink(fileId);
             
-            // بناء رابط البث المعتمد على سيرفر Vercel الخاص بك
-            const domain = process.env.VERCEL_URL || 'your-project.vercel.app';
-            const streamLink = `https://${domain}/stream?file=${encodeURIComponent(fileLink.href)}`;
+            // جلب رابط الدومين الخاص بك على Vercel تلقائياً
+            const host = ctx.headers?.host || process.env.VERCEL_URL || 'your-domain.vercel.app';
+            const streamLink = `https://${host}/api/stream?file=${encodeURIComponent(fileLink.href)}`;
             
-            // البوت يرسل رد تلقائي داخل الجروب بالرابط الجديد للفيلم
-            ctx.reply(`✅ تم تجهيز رابط البث للفيلم بنجاح!\n\n🔗 رابط المشاهدة المباشر:\n${streamLink}`, {
+            // إرسال الرد داخل الجروب
+            await ctx.reply(`✅ تم تجهيز رابط البث للفيلم بنجاح!\n\n🔗 رابط المشاهدة المباشر:\n${streamLink}`, {
                 reply_to_message_id: message.message_id
             });
         } catch (error) {
-            console.error("Error generating stream link:", error);
+            console.error("Error:", error);
         }
     }
 });
 
+// تصدير الدالة لتشغيلها كـ Serverless Function على Vercel
+module.exports = async (req, res) => {
+    try {
+        const urlObj = new URL(req.url, `http://${req.headers.host}`);
+
+        // 1. مسار البث المباشر
+        if (urlObj.pathname.includes('/api/stream')) {
+            const fileUrl = urlObj.searchParams.get('file');
+            if (!fileUrl) {
+                res.status(400).send('Missing file URL');
+                return;
+            }
+
+            const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
+            res.setHeader('Content-Type', response.headers['content-type'] || 'video/mp4');
+            response.data.pipe(res);
+            return;
+        }
+
+        // 2. مسار استقبال تحديثات التليغرام (Webhook)
+        if (req.method === 'POST') {
+            await bot.handleUpdate(req.body, res);
+            if (!res.writableEnded) res.status(200).end();
+            return;
+        }
+
+        res.status(200).send('Streaming Server is Ready!');
+    } catch (error) {
+        console.error(error);
+        res.status(500).send('Internal Error');
+    }
+};
 // محرك البث (Streaming Engine) لتمرير الفيديو للمتصفح
 const server = http.createServer(async (req, res) => {
     const urlObj = new URL(req.url, `http://${req.headers.host}`);
