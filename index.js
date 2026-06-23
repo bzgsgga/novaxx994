@@ -3,22 +3,23 @@ const axios = require('axios');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// معالجة الفيديو في الخاص
+// معالجة الرسائل
 bot.on(['video', 'document'], async (ctx) => {
-    if (ctx.chat.type !== 'private') return;
+    const message = ctx.message || ctx.channelPost;
+    if (!message) return;
 
-    const video = ctx.message.video;
-    const doc = ctx.message.document;
+    const video = message.video;
+    const doc = message.document;
     const fileId = video ? video.file_id : doc.file_id;
 
     try {
-        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر، يرجى الانتظار ثوانٍ...");
+        const waitingMsg = await ctx.reply("⏳ جاري توليد رابط البث المباشر...");
         const fileLink = await ctx.telegram.getFileLink(fileId);
         
         const host = ctx.headers?.host || process.env.VERCEL_URL || 'novaxx994.vercel.app';
         const streamLink = `https://${host}/stream?file=${encodeURIComponent(fileLink.href)}`;
         
-        await ctx.telegram.deleteMessage(ctx.chat.id, waitingMsg.message_id);
+        await ctx.telegram.deleteMessage(ctx.chat.id, waitingMsg.message_id).catch(() => {});
         await ctx.reply(`✅ جاهز للمشاهدة البث المباشر!\n\n🔗 رابط الفيلم المباشر:\n${streamLink}`);
     } catch (error) {
         console.error("Error:", error);
@@ -26,14 +27,56 @@ bot.on(['video', 'document'], async (ctx) => {
     }
 });
 
-bot.start((ctx) => ctx.reply("أهلاً بك! قم بتحويل أو إرسال أي فيلم هنا وسأعطيك رابط البث فوراً."));
+bot.start((ctx) => ctx.reply("أهلاً بك! أرسل أو حوّل أي فيلم هنا وسأعطيك رابط البث فوراً."));
 
-// المصدر المسؤول عن معالجة الطلبات في Vercel
+// دالة مساعدة لقراءة البيانات القادمة كـ Stream وتحويلها إلى JSON
+function parseRequestBody(req) {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+            try { resolve(body ? JSON.parse(body) : {}); }
+            catch (e) { resolve({}); }
+        });
+        req.on('error', (err) => reject(err));
+    });
+}
+
+// السيرفر الرئيسي لـ Vercel
 module.exports = async (req, res) => {
     try {
-        // التأكد من تفعيل قراءة الـ JSON للقادم من تليغرام
+        // معالجة تحديثات التليغرام (POST)
         if (req.method === 'POST') {
-            // تليغرام يرسل التحديثات هنا
+            // قراءة وتفكيك الـ Body يدوياً لضمان توافقه مع Vercel Serverless
+            const body = await parseRequestBody(req);
+            await bot.handleUpdate(body, res);
+            if (!res.writableEnded) {
+                res.status(200).end();
+            }
+            return;
+        }
+
+        const urlObj = new URL(req.url, `https://${req.headers.host}`);
+
+        // مسار البث المباشر
+        if (urlObj.pathname.startsWith('/stream')) {
+            const fileUrl = urlObj.searchParams.get('file');
+            if (!fileUrl) {
+                return res.status(400).send('Missing file URL');
+            }
+
+            const response = await axios({ method: 'get', url: fileUrl, responseType: 'stream' });
+            res.setHeader('Content-Type', response.headers['content-type'] || 'video/mp4');
+            response.data.pipe(res);
+            return;
+        }
+
+        res.status(200).send('Bot Server is Ready and Alive!');
+    } catch (error) {
+        console.error("Server Error:", error);
+        res.status(500).send('Internal Error');
+    }
+};
             await bot.handleUpdate(req.body, res);
             if (!res.writableEnded) {
                 res.status(200).end();
